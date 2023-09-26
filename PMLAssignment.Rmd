@@ -1,0 +1,158 @@
+---
+title: "Practical Machine Learning Assignment"
+author: "Iain Read"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include=FALSE)
+library(magrittr)
+library(dplyr)
+library(caret)
+library(corrplot)
+library(ggplot2)
+set.seed(42)
+```
+
+## Overview
+The goal of this project is to build a model which predicts the manner in which 
+bicep curls were performed, using movement data in the WLE dataset.
+
+## Exploration and Cleaning
+
+```{r loadData, include=T, echo=TRUE}
+
+training <- read.csv("pml-training.csv")
+testing <- read.csv("pml-testing.csv")
+
+dim(training)
+```
+```{r dimTest,include=T, echo=T}
+dim(testing)
+
+```
+
+The training data set has 19622 observations of 160 features, while the testing
+dataset has 20 observations of 160 features. It was noted that the outcome
+variable, classe, is not included in the testing set, and is instead replaced
+with the problem_id feature.
+
+Exploration of the data showed 62 columns with near zero variance, and 41 with
+19216 missing values. These are unlikely to have much predictive power and so
+they were removed from the training set. Also removed were the index variables,
+X and num_window, and the three timestamp variables.
+
+```{r cleaning, include=T, echo=T}
+
+training$user_name <- as.factor(training$user_name)
+training$classe <- as.factor(training$classe)
+testing$user_name <- as.factor(testing$user_name)
+
+colsToRemove <- c("raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "X", "num_window")
+naCols <- colnames(training[, colSums(is.na(training)) > 0.3*nrow(training)])
+nzvCols <- nearZeroVar(training, names=T)
+colsToRemove <- c(colsToRemove, nzvCols, naCols)
+
+cleanup <- function(df, colsToRemove){
+    df %<>% select(-all_of(colsToRemove))
+}
+training2 <- cleanup(training, colsToRemove)
+```
+
+Cleaning up NZV and high NA features left 57 out of 160 columns in the data set.
+Within those, a further 31 were found to be highly correlated with other features,
+and were therefore removed. The correlation cut-off used was 0.5.
+
+```{r correlation, include=T, echo=T}
+training3 <- training2 %>% select(-c("user_name", "classe"))
+training3Corr <- cor(training3)
+corrIndices <- findCorrelation(training3Corr, cutoff = 0.5, exact=T)
+corrCols <- colnames(training3[corrIndices])
+training2 <- cleanup(training2, corrCols)
+colsToRemove <- c(colsToRemove, corrCols)
+testing2 <- cleanup(testing, colsToRemove)
+```
+
+Inspection of cleaned data showed a bias in the training data towards class A, 
+the correct method for lifting. Class A accounts for 28.4% of the records, while
+class D accounts for only 16.4%. While large, this difference is not necessarily
+significant enough to affect the model if the predictors for the two classes are
+sufficiently different. Given that we also have over 3000 records for the least
+represented class, the decision was taken not to undersample class A.
+
+Figure 1: Table of proportions (%) of each class in the data set
+```{r tableClasse, include=T, echo=T}
+tab <- table(training2$classe)
+round(tab/19622, 3)*100
+```
+
+The training data set was split into a training set (80%) and a validation set (20%)
+
+```{r trainTestSplit, include=T, echo=T}
+Train <- createDataPartition(training2$classe, p=0.8, list=F)
+trainingSet <- training2[ Train, ]
+validationSet <- training2 [-Train, ]
+```
+
+## Cross Validation
+K-fold cross validation was performed using 5 folds.
+
+```{r CV, include=T, echo=T}
+ctrl <- trainControl(method = "cv", number = 5)
+```
+
+## Modelling
+A random forest model was selected to fit the data, since there are many variables
+and this is a classification problem, rather than a regression problem.
+
+```{r randomForest, include=T, echo=T}
+rfMod <- train(classe ~ ., data=trainingSet, method="rf", trControl = ctrl)
+```
+
+The achieved accuracy of the final model is 99.99% on the training set.
+
+```{r confusionMatrixTraining, include=T, echo=T}
+confusionMatrix(predict(rfMod), trainingSet$classe)
+```
+
+On the validation set, the achieved accuracy is 99.84%
+
+```{r predictValidation, include=T, echo=T}
+pred <- predict(rfMod, newdata=validationSet)
+confusionMatrix(pred, validationSet$classe)
+```
+
+## Importances
+The importances attached to each feature in the dataset are plotted below. It is
+clear that pitch_forearm is the most important feature, but many of the features
+in the dataset have significant importance. There is a clear step down in importance
+for all values of the user_name feature, so it is likely that this could have
+been excluded from the model.
+
+Figure 2: Feature importance plot
+
+```{r importancePlot, include=T, echo=T}
+imp <- varImp(rfMod)
+importance <- data.frame(imp$importance)
+plot(imp)
+```
+
+## Prediction
+Having been trained and validated, the model was then used to make predictions
+on the test set, as below.
+
+```{r predictions, include=T, echo=T}
+predictions <- predict(rfMod, newdata=testing2)
+predictions
+```
+
+
+
+
+
+
+
+
+
+
+
